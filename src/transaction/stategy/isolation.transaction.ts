@@ -1,0 +1,35 @@
+import { Injectable } from '@nestjs/common';
+
+import { TransactionStrategy } from './strategy.interface';
+import { CreateTransactionDto } from '../dto/create-transaction.dto';
+import { Prisma } from '@prisma/client';
+import { transactionConfig } from '../../config/transactionConfig';
+import { PrismaService } from 'src/prisma/prisma.service';
+
+
+@Injectable()
+export class IsolationStrategy implements TransactionStrategy {
+  constructor(
+    private prisma: PrismaService,
+  ) {}
+
+  private mapIsolation(level: string): Prisma.TransactionIsolationLevel {
+    switch (level) {
+      case 'Serializable': return 'Serializable'
+      case 'Repeatable Read': return 'RepeatableRead'
+      case 'Read Committed': return 'ReadCommitted'
+      default: return 'ReadCommitted'
+    }
+  }
+
+  async handle(dto: CreateTransactionDto) {
+    const level = this.mapIsolation(transactionConfig.isolationLevel)
+    return this.prisma.$transaction(async () => {
+      const atomic = new (require('./atomic.strategy')).AtomicStrategy(this.prisma
+      )
+      return atomic.handle(dto)
+    }, {
+      isolationLevel: level,
+    })
+  }
+}

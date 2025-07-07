@@ -1,0 +1,6 @@
+export enum TransactionStrategyType {
+  PESSIMISTIC = 'PESSIMISTIC',
+  OPTIMISTIC = 'OPTIMISTIC',
+  ATOMIC = 'ATOMIC',
+  ISOLATION = 'ISOLATION',
+}
