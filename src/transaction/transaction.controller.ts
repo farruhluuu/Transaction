@@ -1,18 +1,20 @@
-import { Controller, Post, Body, BadRequestException } from '@nestjs/common';
+import { 
+  Controller, 
+  Post, 
+  Body, 
+  ValidationPipe 
+} from '@nestjs/common';
+import { TransactionService } from './transaction.service';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
-import { OptimisticStrategy } from './stategy/optimistic.transaction';
 
-@Controller('transactions')
+@Controller('transactions') 
 export class TransactionController {
-  constructor(private readonly optimisticService: OptimisticStrategy) {}
-
-  @Post('transfer/optimistic')
-  async transferOptimistic(@Body() dto: CreateTransactionDto) {
-    try {
-      const result = await this.optimisticService.handle(dto)
-      return { success: true, data: result }
-    } catch (error) {
-      throw new BadRequestException(error.message)
-    }
+  constructor(private readonly transactionService: TransactionService) {}
+  @Post('transfer') 
+  
+  async transfer(
+    @Body(new ValidationPipe()) createTransactionDto: CreateTransactionDto,
+  ) {
+    return this.transactionService.transfer(createTransactionDto);
   }
 }

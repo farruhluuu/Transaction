@@ -1,58 +1,60 @@
-# compiled output
-/dist
-/node_modules
-/build
-
-# Logs
-logs
-*.log
+# Node.js
+node_modules/
 npm-debug.log*
-pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-lerna-debug.log*
+pnpm-debug.log*
 
-# OS
-.DS_Store
+# Logs
+logs/
+*.log
+*.log.*
 
-# Tests
-/coverage
-/.nyc_output
-
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# IDE - VSCode
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-
-# dotenv environment variable files
+# Env files
 .env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+.env.*
 
-# temp directory
-.temp
-.tmp
+# TypeScript
+dist/
+build/
+*.tsbuildinfo
 
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
+# Compiled source #
+*.js
+*.js.map
+*.d.ts
 
-# Diagnostic reports (https://nodejs.org/api/report.html)
-report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+# OS-specific
+.DS_Store
+Thumbs.db
 
-/generated/prisma
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Coverage
+coverage/
+.nyc_output/
+coverage-final.json
+
+# Docker
+docker-compose.override.yml
+*.local.yml
+
+# Prisma
+prisma/dev.db
+prisma/dev.db-journal
+prisma/migrations/
+.prisma/
+.env.test
+
+# Jest
+jest-cache/
+jest-config/
+coverage/
+.jest/
+
+# Optional: if using SQLite
+*.sqlite
+*.sqlite-journal

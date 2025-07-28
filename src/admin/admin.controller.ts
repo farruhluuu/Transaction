@@ -9,7 +9,7 @@ export class AdminController {
     private readonly configService: ConfigService
   ) {}
 
-  @Get('transaction')
+  @Get('transaction/history')
   async Transactions() {
     return this.adminService.findAll()
   }

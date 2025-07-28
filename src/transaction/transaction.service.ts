@@ -1,18 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { OptimisticStrategy } from './stategy/optimistic.transaction';
-import { PessimisticStrategy } from './stategy/pessimistic.transaction';
-import { AtomicStrategy } from './stategy/atomic.transaction';
-import { IsolationStrategy } from './stategy/isolation.transaction';
+import { OptimisticStrategy } from './strategy/optimistic.transaction';
+import { PessimisticStrategy } from './strategy/pessimistic.transaction';
+import { AtomicStrategy } from './strategy/atomic.transaction';
+import { IsolationStrategy } from './strategy/isolation.transaction';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
-import { TransactionStrategyType } from './stategy/transaction-strategy.type';
+import { TransactionStrategyType } from './strategy/transaction-strategy.type';
 
 @Injectable()
 export class TransactionService {
-  private strategyMap: Record<TransactionStrategyType, any>
+  private strategyMap: Record<TransactionStrategyType, any>;
 
   constructor(
-    private readonly configService: ConfigService,
     private readonly optimistic: OptimisticStrategy,
     private readonly pessimistic: PessimisticStrategy,
     private readonly atomic: AtomicStrategy,
@@ -23,18 +21,19 @@ export class TransactionService {
       [TransactionStrategyType.PESSIMISTIC]: this.pessimistic,
       [TransactionStrategyType.ATOMIC]: this.atomic,
       [TransactionStrategyType.ISOLATION]: this.isolation,
-    }
+    };
   }
 
   async transfer(dto: CreateTransactionDto) {
-    const strategyKey = this.configService.get<TransactionStrategyType>('TRANSACTION_STRATEGY')
 
-    const strategy = this.strategyMap[strategyKey]
+    const strategyRaw = process.env.TRANSACTION_STRATEGY?.trim().toUpperCase();
+    const strategyKey = strategyRaw as TransactionStrategyType;
+
+    const strategy = this.strategyMap[strategyKey];
 
     if (!strategy) {
-      throw new Error(`Unknown strategy: ${strategyKey}`)
+      throw new Error(`Unknown strategy in .env: ${strategyKey}`);
     }
-
-    return strategy.handle(dto)
+    return strategy.handle(dto);
   }
 }
