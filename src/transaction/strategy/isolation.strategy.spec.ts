@@ -9,22 +9,22 @@ import { AtomicStrategy } from './atomic.transaction';
 jest.mock('./atomic.transaction');
 
 describe('IsolationStrategy', () => {
-  let strategy: IsolationStrategy
-  let prisma: PrismaService
-  let redis: Redis
+  let strategy: IsolationStrategy;
+  let prisma: PrismaService;
+  let redis: Redis;
 
   const mockDto: CreateTransactionDto = {
     senderId: 1,
     receiverId: 2,
     amount: 100,
-  }
+  };
 
-  const mockAtomicHandle = jest.fn().mockResolvedValue({ id: 1, status: 'SUCCESS' })
+  const mockAtomicHandle = jest.fn().mockResolvedValue({ id: 1, status: 'SUCCESS' });
 
   beforeEach(async () => {
     (AtomicStrategy as jest.Mock).mockImplementation(() => ({
       handle: mockAtomicHandle,
-    }))
+    }));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -32,7 +32,9 @@ describe('IsolationStrategy', () => {
         {
           provide: PrismaService,
           useValue: {
-            $transaction: jest.fn((cb, options) => cb()), 
+            $transaction: jest.fn().mockImplementation((cb, options) => {
+              return cb({ });
+            }),
           },
         },
         {
@@ -40,7 +42,7 @@ describe('IsolationStrategy', () => {
           useValue: {},
         },
       ],
-    }).compile()
+    }).compile();
 
     strategy = module.get<IsolationStrategy>(IsolationStrategy)
     prisma = module.get<PrismaService>(PrismaService)

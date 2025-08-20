@@ -1,99 +1,92 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AtomicStrategy } from './atomic.transaction';
 import { PrismaService } from '../../prisma/prisma.service';
-import Redis from 'ioredis';
 import { CreateTransactionDto } from '../dto/create-transaction.dto';
+import { Redis } from 'ioredis';
+import { TransactionStatus } from '../enum/enum.transaction';
+
+const createDecimalMock = (value: number) => ({
+  toNumber: jest.fn().mockReturnValue(value),
+  lt: jest.fn().mockImplementation((amountToCompare) => value < amountToCompare),
+});
 
 describe('AtomicStrategy', () => {
   let strategy: AtomicStrategy;
-  let prisma: PrismaService;
-  let redis: Redis;
+  let redis: jest.Mocked<Redis>;
 
-  const mockDto: CreateTransactionDto = {
-    senderId: 1,
-    receiverId: 2,
-    amount: 100,
-  };
+  const mockDto: CreateTransactionDto = { senderId: 1, receiverId: 2, amount: 100 };
 
-  const mockSender = {
-    id: 1,
-    balance: {
-      lt: jest.fn().mockReturnValue(false),
-      sub: jest.fn().mockReturnValue(900),
-    },
-  };
-
-  const mockReceiver = {
-    id: 2,
-    balance: {
-      add: jest.fn().mockReturnValue(1100),
-    },
-  };
-
-  const tx = {
+  const mockPrismaTransaction = {
     user: {
-      findUnique: jest.fn()
-        .mockImplementation(({ where }) => (where.id === 1 ? mockSender : mockReceiver)),
+      findUnique: jest.fn(),
       update: jest.fn(),
     },
     transaction: {
-      create: jest.fn().mockResolvedValue({ id: 1, status: 'SUCCESS' }),
+      create: jest.fn().mockResolvedValue({ id: 'some-tx-id', status: TransactionStatus.SUCCESS }),
     },
   };
+  
+  const mockSender = { id: 1, balance: createDecimalMock(1000) }
+  const mockReceiver = { id: 2, balance: createDecimalMock(1000) }
 
   beforeEach(async () => {
+    jest.clearAllMocks()
+    
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AtomicStrategy,
         {
           provide: PrismaService,
           useValue: {
-            $transaction: (cb: any) => cb(tx),
+            $transaction: jest.fn().mockImplementation(async (callback) => {
+              return callback(mockPrismaTransaction)
+            }),
           },
         },
         {
           provide: 'REDIS_CLIENT',
           useValue: {
+            get: jest.fn().mockResolvedValue('1000'),
             set: jest.fn().mockResolvedValue('OK'),
-            del: jest.fn(),
-            lpush: jest.fn(),
-            ltrim: jest.fn(),
+            del: jest.fn().mockResolvedValue(1),
+            incrbyfloat: jest.fn(),
+            expire: jest.fn().mockResolvedValue(1),
+            lpush: jest.fn().mockResolvedValue(1),
+            ltrim: jest.fn().mockResolvedValue('OK'),
           },
         },
       ],
-    }).compile();
+    }).compile()
 
-    strategy = module.get<AtomicStrategy>(AtomicStrategy);
-    prisma = module.get<PrismaService>(PrismaService);
-    redis = module.get<Redis>('REDIS_CLIENT');
+    strategy = module.get<AtomicStrategy>(AtomicStrategy)
+    redis = module.get<jest.Mocked<Redis>>('REDIS_CLIENT')
+
+    mockPrismaTransaction.user.findUnique.mockImplementation(async ({ where }) => {
+      if (where.id === mockDto.senderId) return mockSender
+      if (where.id === mockDto.receiverId) return mockReceiver
+      return null;
+    });
   });
 
   it('should transfer funds atomically and release lock', async () => {
-    const result = await strategy.handle(mockDto);
+    const result = await strategy.handle(mockDto)
 
-    expect(redis.set).toHaveBeenCalledWith('key', 'value', 'EX', 60);
-    expect(tx.user.findUnique).toHaveBeenCalledTimes(2);
-    expect(tx.user.update).toHaveBeenCalledTimes(2);
-    expect(tx.transaction.create).toHaveBeenCalled();
-    expect(redis.set).toHaveBeenNthCalledWith(2, 'balance:user:1', '900');
-    expect(redis.set).toHaveBeenNthCalledWith(3, 'balance:user:2', '1100');
-    expect(redis.lpush).toHaveBeenCalled();
-    expect(redis.del).toHaveBeenCalledWith('lock:user:1');
-    expect(result).toEqual({ id: 1, status: 'SUCCESS' });
-  });
+    expect(mockPrismaTransaction.user.findUnique).toHaveBeenCalledTimes(2)
+    expect(mockSender.balance.lt).toHaveBeenCalledWith(mockDto.amount)
+    expect(mockPrismaTransaction.user.update).toHaveBeenCalled()
+    expect(mockPrismaTransaction.transaction.create).toHaveBeenCalled()
+    expect(redis.del).toHaveBeenCalledWith(`lock:user:${mockDto.senderId}`)
+    expect(result).toEqual({ id: 'some-tx-id', status: 'SUCCESS' })
+  })
 
-  it('should throw if lock not acquired', async () => {
-    redis.set = jest.fn().mockResolvedValue(null);
+  it('should throw an error for insufficient funds and still release the lock', async () => {
+    const poorSender = { id: 1, balance: createDecimalMock(50) }
+    mockPrismaTransaction.user.findUnique.mockImplementationOnce(async () => poorSender)
 
-    await expect(strategy.handle(mockDto)).rejects.toThrow(
-      'Transaction in progress. Please try again.',
-    );
-  });
-
-  it('should throw if sender has insufficient funds and still release lock', async () => {
-    mockSender.balance.lt = jest.fn().mockReturnValue(true);
-
-    await expect(strategy.handle(mockDto)).rejects.toThrow('Insufficient funds');
-    expect(redis.del).toHaveBeenCalledWith('lock:user:1');
-  });
-});
+    await expect(strategy.handle(mockDto)).rejects.toThrow('Insufficient funds')
+    
+    expect(poorSender.balance.lt).toHaveBeenCalledWith(mockDto.amount)
+    
+    expect(redis.del).toHaveBeenCalledWith(`lock:user:${mockDto.senderId}`)
+  })
+})

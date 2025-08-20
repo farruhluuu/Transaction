@@ -3,13 +3,16 @@ import { TransactionStrategy } from './strategy.interface';
 import { CreateTransactionDto } from '../dto/create-transaction.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import Redis from 'ioredis';
+import { TransactionStatus } from '../enum/enum.transaction';
 
 @Injectable()
 export class OptimisticStrategy implements TransactionStrategy {
   constructor(
     private prisma: PrismaService,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
-  ) {}
+  ) { }
+
+  private readonly BALANCE_TTL = 60
 
   async handle({ senderId, receiverId, amount }: CreateTransactionDto) {
     const sender = await this.prisma.user.findUnique({ where: { id: senderId } })
@@ -37,14 +40,15 @@ export class OptimisticStrategy implements TransactionStrategy {
       })
 
       const txResult = await tx.transaction.create({
-        data: { senderId, receiverId, amount, status: 'SUCCESS' },
+        data: { senderId, receiverId, amount, status: TransactionStatus.SUCCESS },
       })
 
-      // 🧠 Обновим Redis-кэш балансов
-      await this.redis.set(`balance:user:${senderId}`, sender.balance.sub(amount).toString())
-      await this.redis.set(`balance:user:${receiverId}`, receiver.balance.add(amount).toString())
+      await this.redis.incrbyfloat(`balance:user:${senderId}`, -amount);
+      await this.redis.expire(`balance:user:${senderId}`, this.BALANCE_TTL);
 
-      // 🧠 Кэшируем последние транзакции
+      await this.redis.incrbyfloat(`balance:user:${receiverId}`, amount);
+      await this.redis.expire(`balance:user:${receiverId}`, this.BALANCE_TTL);
+      
       await this.redis.lpush(`tx:user:${senderId}`, JSON.stringify(txResult))
       await this.redis.ltrim(`tx:user:${senderId}`, 0, 9)
 

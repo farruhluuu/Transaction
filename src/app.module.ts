@@ -10,7 +10,7 @@ import { ConfigModule } from '@nestjs/config';
     UserModule,
     TransactionModule,
     AdminModule,
-
+    
   ],
 })
 export class AppModule {}

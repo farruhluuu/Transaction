@@ -28,7 +28,7 @@ export class IsolationStrategy implements TransactionStrategy {
 
     return this.prisma.$transaction(async () => {
       const atomic = new AtomicStrategy(this.prisma, this.redis)
-      return atomic.handle(dto);
+      return atomic.handle(dto)
     }, {
       isolationLevel: level,
     });

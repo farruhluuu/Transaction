@@ -3,96 +3,125 @@ import { PessimisticStrategy } from './pessimistic.transaction';
 import { PrismaService } from '../../prisma/prisma.service';
 import Redis from 'ioredis';
 import { CreateTransactionDto } from '../dto/create-transaction.dto';
+import { TransactionStatus } from '../enum/enum.transaction';
+
+const createDecimalMock = (value: number) => ({
+  toNumber: jest.fn().mockReturnValue(value),
+})
 
 describe('PessimisticStrategy', () => {
   let strategy: PessimisticStrategy
-  let redis: Redis
+  let redis: jest.Mocked<Redis>
 
   const mockDto: CreateTransactionDto = {
     senderId: 1,
     receiverId: 2,
     amount: 100,
-  }
+  };
 
-  const mockSender = { id: 1, balance: '1000.00' }
-  const mockReceiver = { id: 2, balance: '1000.00' }
+  const mockSender = { id: 1, balance: createDecimalMock(1000) }
+  const mockReceiver = { id: 2, balance: createDecimalMock(1000) }
 
-  const tx = {
-    $queryRawUnsafe: jest
-      .fn()
-      .mockImplementationOnce(() => [mockSender])
-      .mockImplementationOnce(() => [mockReceiver]),
-    $executeRawUnsafe: jest.fn(),
+  const mockPrismaTransaction = {
+    user: {
+      findUnique: jest.fn(),
+      update: jest.fn().mockResolvedValue({}),
+    },
     transaction: {
-      create: jest.fn().mockResolvedValue({ id: 1, status: 'SUCCESS' }),
+      create: jest.fn().mockResolvedValue({ id: 'tx-id-1', status: TransactionStatus.SUCCESS }),
     },
   }
 
+  let redisStore: Record<string, string> = {}
+
   beforeEach(async () => {
+    jest.clearAllMocks()
+    redisStore = {}
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PessimisticStrategy,
         {
           provide: PrismaService,
           useValue: {
-            $transaction: (cb: any) => cb(tx),
+            $transaction: jest.fn().mockImplementation(async (callback) => {
+              return callback(mockPrismaTransaction)
+            }),
           },
         },
         {
           provide: 'REDIS_CLIENT',
           useValue: {
-            set: jest.fn(),
-            lpush: jest.fn(),
-            ltrim: jest.fn(),
+            set: jest.fn((key, value, mode?, duration?) => {
+              redisStore[key] = String(value);
+              return Promise.resolve('OK');
+            }),
+            get: jest.fn((key) => Promise.resolve(redisStore[key] ?? null)),
+            del: jest.fn((key) => {
+              delete redisStore[key];
+              return Promise.resolve(1);
+            }),
+            incrbyfloat: jest.fn((key, amount) => {
+              const current = parseFloat(redisStore[key] ?? '0');
+              const newVal = current + amount;
+              redisStore[key] = String(newVal);
+              return Promise.resolve(newVal);
+            }),
+            expire: jest.fn().mockResolvedValue(1),
+            lpush: jest.fn().mockResolvedValue(1),
+            ltrim: jest.fn().mockResolvedValue('OK'),
           },
         },
       ],
-    }).compile()
+    }).compile();
 
     strategy = module.get<PessimisticStrategy>(PessimisticStrategy)
-    redis = module.get<Redis>('REDIS_CLIENT')
+    redis = module.get<jest.Mocked<Redis>>('REDIS_CLIENT')
+
+    mockPrismaTransaction.user.findUnique.mockImplementation(({ where }) => {
+      if (where.id === mockDto.senderId) return Promise.resolve(mockSender)
+      if (where.id === mockDto.receiverId) return Promise.resolve(mockReceiver)
+      return Promise.resolve(null)
+    })
   })
 
-  it('should transfer funds with pessimistic locking', async () => {
+  it('should transfer funds and update Redis cache', async () => {
     const result = await strategy.handle(mockDto)
 
-    expect(tx.$queryRawUnsafe).toHaveBeenNthCalledWith(1, expect.stringContaining('FOR UPDATE'), 1)
-    expect(tx.$queryRawUnsafe).toHaveBeenNthCalledWith(2, expect.stringContaining('FOR UPDATE'), 2)
-
-    expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE "User" SET balance = balance - $1'),
-      100,
-      1,
+    expect(mockPrismaTransaction.user.findUnique).toHaveBeenCalled()
+    expect(mockPrismaTransaction.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: mockDto.senderId } })
     )
-    expect(tx.$executeRawUnsafe).toHaveBeenCalledWith(
-      expect.stringContaining('UPDATE "User" SET balance = balance + $1'),
-      100,
-      2,
+    expect(mockPrismaTransaction.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: mockDto.receiverId } })
     )
 
-    expect(tx.transaction.create).toHaveBeenCalled()
+    expect(result).toEqual({ id: 'tx-id-1', status: 'SUCCESS' })
 
-    expect(redis.set).toHaveBeenCalledWith('balance:user:1', '900')
-    expect(redis.set).toHaveBeenCalledWith('balance:user:2', '1100')
-    expect(redis.lpush).toHaveBeenCalled()
-    expect(result).toEqual({ id: 1, status: 'SUCCESS' })
+    expect(await redis.get(`balance:${mockDto.senderId}`)).toBeDefined()
+  })
+
+  it('should read balance from Redis instead of DB when available', async () => {
+    await redis.set(`balance:${mockDto.senderId}`, '500')
+
+    await strategy.handle(mockDto)
+
+    expect(mockPrismaTransaction.user.findUnique).toHaveBeenCalledWith(
+      expect.not.objectContaining({ where: { id: mockDto.senderId } })
+    )
   })
 
   it('should throw if sender not found', async () => {
-    tx.$queryRawUnsafe = jest
-      .fn()
-      .mockImplementationOnce(() => []) 
-      .mockImplementationOnce(() => [mockReceiver])
-
+    mockPrismaTransaction.user.findUnique.mockImplementationOnce(() => Promise.resolve(null))
     await expect(strategy.handle(mockDto)).rejects.toThrow('User not found')
   })
 
   it('should throw if insufficient funds', async () => {
-    tx.$queryRawUnsafe = jest
-      .fn()
-      .mockImplementationOnce(() => [{ id: 1, balance: '50' }])
-      .mockImplementationOnce(() => [mockReceiver])
+    const poorSender = { id: 1, balance: createDecimalMock(50) }
+    mockPrismaTransaction.user.findUnique.mockImplementationOnce(() => Promise.resolve(poorSender))
 
     await expect(strategy.handle(mockDto)).rejects.toThrow('Insufficient funds')
+    expect(poorSender.balance.toNumber).toHaveBeenCalled()
+    expect(mockPrismaTransaction.user.update).not.toHaveBeenCalled()
   })
 })

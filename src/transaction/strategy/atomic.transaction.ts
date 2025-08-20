@@ -3,13 +3,16 @@ import { TransactionStrategy } from './strategy.interface';
 import { CreateTransactionDto } from '../dto/create-transaction.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import Redis from 'ioredis';
+import { TransactionStatus } from '../enum/enum.transaction';
 
 @Injectable()
 export class AtomicStrategy implements TransactionStrategy {
   constructor(
     private prisma: PrismaService,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
-  ) {}
+  ) { }
+
+  private readonly BALANCE_TTL = 60
 
   async handle(dto: CreateTransactionDto) {
     const { senderId, receiverId, amount } = dto
@@ -29,7 +32,7 @@ export class AtomicStrategy implements TransactionStrategy {
         if (!sender || !receiver) throw new Error('User not found')
 
         if (sender.balance.lt(amount)) {
-          throw new Error('Insufficient funds');
+          throw new Error('Insufficient funds')
         }
 
         await tx.user.update({
@@ -43,16 +46,18 @@ export class AtomicStrategy implements TransactionStrategy {
         })
 
         const txResult = await tx.transaction.create({
-          data: { senderId, receiverId, amount, status: 'SUCCESS' },
+          data: { senderId, receiverId, amount, status: TransactionStatus.SUCCESS },
         })
+        await this.redis.incrbyfloat(`balance:user:${senderId}`, -amount)
+        await this.redis.expire(`balance:user:${senderId}`, this.BALANCE_TTL)
 
-        await this.redis.set(`balance:user:${senderId}`, sender.balance.sub(amount).toString())
-        await this.redis.set(`balance:user:${receiverId}`, receiver.balance.add(amount).toString())
-      
+        await this.redis.incrbyfloat(`balance:user:${receiverId}`, amount)
+        await this.redis.expire(`balance:user:${receiverId}`, this.BALANCE_TTL)
+
         await this.redis.lpush(`tx:user:${senderId}`, JSON.stringify(txResult))
         await this.redis.ltrim(`tx:user:${senderId}`, 0, 9)
-        return txResult;
-      });
+        return txResult
+      })
     } finally {
       await this.redis.del(lockKey)
     }
