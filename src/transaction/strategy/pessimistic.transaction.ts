@@ -49,8 +49,8 @@ export class PessimisticStrategy implements TransactionStrategy {
       const updatedSender = await tx.user.findUnique({ where: { id: senderId } })
       const updatedReceiver = await tx.user.findUnique({ where: { id: receiverId } })
 
-      await this.redis.set(`balance:user:${senderId}`, updatedSender.balance.toString(), 'EX', this.BALANCE_TTL)
-      await this.redis.set(`balance:user:${receiverId}`, updatedReceiver.balance.toString(), 'EX', this.BALANCE_TTL)
+      await this.redis.set(`balance:user:${senderId}`, updatedSender.balance.toString(), 'EX', this.BALANCE_TTL, 'NX')
+      await this.redis.set(`balance:user:${receiverId}`, updatedReceiver.balance.toString(), 'EX', this.BALANCE_TTL, 'NX')
 
 
       await this.redis.lpush(`tx:user:${senderId}`, JSON.stringify(txResult))

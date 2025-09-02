@@ -18,10 +18,12 @@ export class AtomicStrategy implements TransactionStrategy {
     const { senderId, receiverId, amount } = dto
 
     const lockKey = `lock:user:${senderId}`
-    const lock = await this.redis.set(`key`, 'value', 'EX', 60)
+    
+    let lock = await this.redis.set(`lock:user:${dto.senderId}`, '1', 'EX', 5, 'NX');
 
-    if (!lock) {
-      throw new Error('Transaction in progress. Please try again.')
+    while (!lock) {
+      await new Promise(res => setTimeout(res, 50));
+      lock = await this.redis.set(`lock:user:${dto.senderId}`, '1', 'EX', 5, 'NX');
     }
 
     try {
