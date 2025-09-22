@@ -23,90 +23,54 @@ describe('ISOLATION (Serializable) - параллельные переводы',
   const makeBalance = () => ({ toNumber: () => balance, lt: (amt: number) => balance < amt });
 
   beforeEach(async () => {
-  jest.clearAllMocks();
-  balance = 1000;
-  mockQueueAdd = jest.fn();
+    jest.clearAllMocks();
+    balance = 1000;
+    mockQueueAdd = jest.fn();
 
-  prismaMock.user.findUnique.mockImplementation(({ where }) => {
-    console.log('findUnique called with:', where);
-    return { id: where.id, balance: makeBalance() };
-  });
-  prismaMock.user.update.mockImplementation(({ where, data }) => {
-    console.log('update called with:', where, data);
-    if (data.balance?.decrement) balance -= data.balance.decrement;
-    if (data.balance?.increment) balance += data.balance.increment;
-    return { id: where.id, balance: makeBalance() };
-  });
-  prismaMock.transaction.create.mockImplementation(({ data }) => {
-    console.log('create transaction called with:', data);
-    return { id: Math.floor(Math.random() * 1e6), ...data };
-  });
-
-  let isRunning = false;
-  const queue: (() => Promise<any>)[] = [];
-
-  prismaMock.$transaction.mockImplementation(async (fn) => {
-    return new Promise((resolve, reject) => {
-      queue.push(async () => {
-        try {
-          console.log('Starting transaction');
-          const result = await fn(prismaMock);
-          console.log('Transaction completed');
-          resolve(result);
-        } catch (err) {
-          console.error('Transaction error:', err);
-          reject(err);
-        }
-      });
-
-      const runNext = async () => {
-        if (!isRunning && queue.length > 0) {
-          isRunning = true;
-          const next = queue.shift()!;
-          try {
-            await next();
-          } finally {
-            isRunning = false;
-            if (queue.length > 0) {
-              await runNext();
-            }
-          }
-        }
-      };
-
-      runNext();
+    prismaMock.user.findUnique.mockImplementation(({ where }) => ({ id: where.id, balance: makeBalance() }));
+    prismaMock.user.update.mockImplementation(({ where, data }) => {
+      if (data.balance?.decrement) balance -= data.balance.decrement;
+      if (data.balance?.increment) balance += data.balance.increment;
+      return { id: where.id, balance: makeBalance() };
     });
+    prismaMock.transaction.create.mockImplementation(({ data }) => ({ id: Math.floor(Math.random() * 1e6), ...data }));
+
+    // Симуляция последовательного выполнения транзакций (Serializable)
+    let running = false;
+    prismaMock.$transaction.mockImplementation(async (fn: any, opts?: any) => {
+      if (opts?.isolationLevel === 'Serializable') {
+        while (running) await new Promise((r) => setTimeout(r, 1));
+        running = true;
+        try { return await fn(prismaMock); } finally { running = false; }
+      }
+      return fn(prismaMock, opts);
+    });
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        TransactionService,
+        { provide: IsolationStrategy, useFactory: () => new IsolationStrategy(prismaMock as any, redisMock as any) },
+        { provide: AtomicStrategy, useValue: { handle: jest.fn() } },
+        { provide: OptimisticStrategy, useValue: { handle: jest.fn() } },
+        { provide: PessimisticStrategy, useValue: { handle: jest.fn() } },
+        { provide: 'BullQueue_transaction-logs', useValue: { add: mockQueueAdd } },
+        { provide: 'REDIS_CLIENT', useValue: redisMock },
+      ],
+    }).compile();
+
+    service = module.get<TransactionService>(TransactionService);
+  })
+
+  it('при ISOLATION_LEVEL=Serializable транзакции выполняются без аномалий (симуляция последовательного выполнения)', async () => {
+    process.env.TRANSACTION_STRATEGY = TransactionStrategyType.ISOLATION;
+    process.env.ISOLATION_LEVEL = 'Serializable';
+
+    const dto1 = { senderId: 1, receiverId: 2, amount: 200 };
+    const dto2 = { senderId: 1, receiverId: 2, amount: 300 };
+
+    await Promise.all([service.transfer(dto1), service.transfer(dto2)]);
+
+    expect(balance).toBe(500);
+    expect(mockQueueAdd).toHaveBeenCalledTimes(2);
   });
-
-  const module: TestingModule = await Test.createTestingModule({
-    providers: [
-      TransactionService,
-      { provide: IsolationStrategy, useFactory: () => new IsolationStrategy(prismaMock as any, redisMock as any) },
-      { provide: AtomicStrategy, useValue: { handle: jest.fn() } },
-      { provide: OptimisticStrategy, useValue: { handle: jest.fn() } },
-      { provide: PessimisticStrategy, useValue: { handle: jest.fn() } },
-      { provide: 'BullQueue_transaction-logs', useValue: { add: mockQueueAdd } },
-      { provide: 'REDIS_CLIENT', useValue: redisMock },
-    ],
-  }).compile();
-
-  service = module.get<TransactionService>(TransactionService);
 });
-
-it('при ISOLATION_LEVEL=Serializable транзакции выполняются без аномалий (симуляция последовательного выполнения)', async () => {
-  process.env.TRANSACTION_STRATEGY = TransactionStrategyType.ISOLATION;
-  process.env.ISOLATION_LEVEL = 'Serializable';
-
-  const dto1 = { senderId: 1, receiverId: 2, amount: 200 };
-  const dto2 = { senderId: 1, receiverId: 2, amount: 300 };
-
-  console.time('TransferTest');
-  await service.transfer(dto1);
-  console.log('First transfer completed');
-  await service.transfer(dto2);
-  console.log('Second transfer completed');
-  console.timeEnd('TransferTest');
-
-  expect(balance).toBe(500);
-  expect(mockQueueAdd).toHaveBeenCalledTimes(2);
-})})

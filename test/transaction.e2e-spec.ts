@@ -55,7 +55,7 @@ describe('TransactionController (e2e)', () => {
   });
 
   it('POST /transactions/transfer — ошибка валидации', async () => {
-    const dto = { senderId: 1, amount: 100 }; // нет receiverId
+    const dto = { senderId: 1, amount: 100 }
 
     const res = await request(app.getHttpServer())
       .post('/transactions/transfer')

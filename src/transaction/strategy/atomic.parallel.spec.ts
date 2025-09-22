@@ -14,30 +14,9 @@ describe('ATOMIC - параллельные переводы', () => {
   let balance: number;
 
   const redisMock: any = {
-    _locks: new Set(),
-
-    set: jest.fn().mockImplementation((key, value, mode, ttl, nx) => {
-      if (nx === 'NX') {
-        if (redisMock._locks.has(key)) {
-          return null
-        }
-        redisMock._locks.add(key);
-        return 'OK'
-      }
-      return 'OK'
-    }),
-
-    del: jest.fn().mockImplementation((key) => {
-      redisMock._locks.delete(key);
-      return 1;
-    }),
-
+    set: jest.fn(),
     expire: jest.fn(),
-    incrbyfloat: jest.fn(),
-    lpush: jest.fn(),
-    ltrim: jest.fn(),
   };
-
 
   const prismaMock: any = {
     user: {
@@ -67,25 +46,7 @@ describe('ATOMIC - параллельные переводы', () => {
     });
     prismaMock.transaction.create.mockImplementation(({ data }: any) => ({ id: Math.floor(Math.random() * 1e6), ...data }));
 
-    prismaMock.$transaction.mockImplementation(async (fn: any) => {
-      const tx = {
-        ...prismaMock,
-        user: {
-          ...prismaMock.user,
-          update: jest.fn(({ where, data }) => {
-            if (data.balance?.decrement) {
-              const amt = data.balance.decrement;
-              if (balance < amt) throw new Error('Insufficient funds');
-              balance -= amt;
-            }
-            if (data.balance?.increment) balance += data.balance.increment;
-            return { id: where.id, balance: makeBalance() };
-          }),
-        },
-      };
-      return fn(tx); 
-    });
-
+    prismaMock.$transaction.mockImplementation(async (fn: any) => fn(prismaMock));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -102,7 +63,7 @@ describe('ATOMIC - параллельные переводы', () => {
     service = module.get<TransactionService>(TransactionService);
   });
 
-  it('два параллельных списания корректно уменьшают баланс ', async () => {
+  it('два параллельных списания корректно уменьшают баланс (1000 - 200 - 300 = 500)', async () => {
     process.env.TRANSACTION_STRATEGY = TransactionStrategyType.ATOMIC;
 
     const dto1 = { senderId: 1, receiverId: 2, amount: 200 };
@@ -110,8 +71,7 @@ describe('ATOMIC - параллельные переводы', () => {
 
     await Promise.all([service.transfer(dto1), service.transfer(dto2)]);
 
-    expect(balance).toBe(500)
-
+    expect(balance).toBe(500);
     expect(mockQueueAdd).toHaveBeenCalledTimes(2);
   });
 });

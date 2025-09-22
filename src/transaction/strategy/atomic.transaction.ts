@@ -50,6 +50,7 @@ export class AtomicStrategy implements TransactionStrategy {
         const txResult = await tx.transaction.create({
           data: { senderId, receiverId, amount, status: TransactionStatus.SUCCESS },
         })
+        
         await this.redis.incrbyfloat(`balance:user:${senderId}`, -amount)
         await this.redis.expire(`balance:user:${senderId}`, this.BALANCE_TTL)
 

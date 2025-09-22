@@ -38,8 +38,10 @@ describe('OPTIMISTIC - параллельные переводы (конфлик
       }
       return { id: where.id, balance: makeBalance(), version };
     });
+    let first = true;
     prismaMock.user.updateMany.mockImplementation(({ where, data }: any) => {
-      if (where.version === version) {
+      if (first) {
+        first = false;
         if (data.balance?.decrement) {
           const amt = data.balance.decrement;
           if (balance < amt) return { count: 0 };
@@ -71,21 +73,6 @@ describe('OPTIMISTIC - параллельные переводы (конфлик
   it('одна из параллельных транзакций откатывается при конфликте версии', async () => {
     process.env.TRANSACTION_STRATEGY = TransactionStrategyType.OPTIMISTIC;
 
-    let first = true;
-    prismaMock.user.updateMany.mockImplementation(({ where, data }: any) => {
-      if (first) {
-        first = false;
-        if (data.balance?.decrement) {
-          const amt = data.balance.decrement;
-          if (balance < amt) return { count: 0 };
-          balance -= amt;
-        }
-        if (data.version?.increment) version += data.version.increment;
-        return { count: 1 };
-      }
-      return { count: 0 };
-    });
-
     const dto1 = { senderId: 1, receiverId: 2, amount: 200 };
     const dto2 = { senderId: 1, receiverId: 2, amount: 300 };
 
@@ -95,5 +82,7 @@ describe('OPTIMISTIC - параллельные переводы (конфлик
 
     expect(balance).toBe(800);
     expect(mockQueueAdd).toHaveBeenCalledTimes(1);
+    expect(ok.length).toBe(1);
+    expect(fail.length).toBe(1);
   });
-})
+});

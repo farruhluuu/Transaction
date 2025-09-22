@@ -38,7 +38,14 @@ describe('PESSIMISTIC - параллельные переводы (симуля�
       return { id: where.id, balance: makeBalance() };
     });
     prismaMock.transaction.create.mockImplementation(({ data }: any) => ({ id: Math.floor(Math.random() * 1e6), ...data }));
-    prismaMock.$transaction.mockImplementation(async (fn: any) => fn(prismaMock));
+
+    // Симуляция блокировки: $transaction выполняется по очереди
+    let locked = false;
+    prismaMock.$transaction.mockImplementation(async (fn: any) => {
+      while (locked) await new Promise((r) => setTimeout(r, 1));
+      locked = true;
+      try { return await fn(prismaMock); } finally { locked = false; }
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -53,20 +60,10 @@ describe('PESSIMISTIC - параллельные переводы (симуля�
     }).compile();
 
     service = module.get<TransactionService>(TransactionService);
-  });
+  })
 
   it('вторая транзакция ждёт завершения первой и итоговый баланс корректен', async () => {
     process.env.TRANSACTION_STRATEGY = TransactionStrategyType.PESSIMISTIC;
-
-    // Симуляция блокировки: $transaction выполняется по очереди
-    let locked = false;
-    prismaMock.$transaction.mockImplementation(async (fn: any) => {
-      while (locked) await new Promise((r) => setTimeout(r, 1));
-      locked = true;
-      try 
-        { return await fn(prismaMock); } 
-      finally { locked = false; }
-    });
 
     const dto1 = { senderId: 1, receiverId: 2, amount: 200 };
     const dto2 = { senderId: 1, receiverId: 2, amount: 300 };
