@@ -6,8 +6,18 @@ import { TransactionService } from '../src/transaction/transaction.service';
 
 describe('TransactionController (e2e)', () => {
   let app: INestApplication;
-  let transactionService = {
+  const transactionService = {
     transfer: jest.fn(),
+  };
+
+  const validDto = { senderId: 1, receiverId: 2, amount: 100 };
+  const mockResponse = {
+    id: 1,
+    senderId: 1,
+    receiverId: 2,
+    amount: 100,
+    status: 'SUCCESS',
+    createdAt: new Date().toISOString(),
   };
 
   beforeAll(async () => {
@@ -19,7 +29,7 @@ describe('TransactionController (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe());
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
     await app.init();
   });
 
@@ -27,41 +37,34 @@ describe('TransactionController (e2e)', () => {
     await app.close();
   });
 
-  it('POST /transactions/transfer — успешный перевод', async () => {
-    transactionService.transfer.mockResolvedValue({
-      id: 1,
-      senderId: 1,
-      receiverId: 2,
-      amount: 100,
-      status: 'SUCCESS',
-      createdAt: new Date().toISOString(),
+  describe('POST /transactions/transfer', () => {
+    it('успешный перевод', async () => {
+      transactionService.transfer.mockResolvedValue(mockResponse);
+
+      const res = await request(app.getHttpServer())
+        .post('/transactions/transfer')
+        .send(validDto)
+        .expect(201);
+
+      expect(res.body).toMatchObject({
+        id: 1,
+        senderId: 1,
+        receiverId: 2,
+        amount: 100,
+        status: 'SUCCESS',
+      });
+      expect(transactionService.transfer).toHaveBeenCalledWith(validDto);
     });
 
-    const dto = { senderId: 1, receiverId: 2, amount: 100 };
+    it('ошибка валидации', async () => {
+      const invalidDto = { senderId: 1, amount: 100 };
 
-    const res = await request(app.getHttpServer())
-      .post('/transactions/transfer')
-      .send(dto)
-      .expect(201);
+      const res = await request(app.getHttpServer())
+        .post('/transactions/transfer')
+        .send(invalidDto)
+        .expect(400);
 
-    expect(res.body).toMatchObject({
-      id: 1,
-      senderId: 1,
-      receiverId: 2,
-      amount: 100,
-      status: 'SUCCESS',
+      expect(res.body.message).toBeDefined();
     });
-    expect(transactionService.transfer).toHaveBeenCalledWith(dto);
-  });
-
-  it('POST /transactions/transfer — ошибка валидации', async () => {
-    const dto = { senderId: 1, amount: 100 }
-
-    const res = await request(app.getHttpServer())
-      .post('/transactions/transfer')
-      .send(dto)
-      .expect(400);
-
-    expect(res.body.message).toBeDefined();
   });
 });
